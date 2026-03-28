@@ -27,3 +27,15 @@ export interface Order {
   status: 'pending' | 'completed' | 'cancelled';
   createdAt: any;
 }
+
+export interface BusinessInfo {
+  openingHours: {
+    monThu: string;
+    friSat: string;
+    sun: string;
+  };
+  address: string;
+  phone: string;
+  whatsappNumber: string;
+  logoUrl?: string;
+}

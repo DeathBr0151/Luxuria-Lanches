@@ -39,6 +39,19 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "items", "total"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Business configuration and information",
+      "type": "object",
+      "properties": {
+        "openingHours": { "type": "object" },
+        "address": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsappNumber": { "type": "string" },
+        "logoUrl": { "type": "string" }
+      },
+      "required": ["openingHours", "address", "phone", "whatsappNumber"]
     }
   },
   "firestore": {
@@ -53,6 +66,14 @@
     "/orders/{orderId}": {
       "schema": "Order",
       "description": "Order history"
+    },
+    "/settings/{settingId}": {
+      "schema": "Settings",
+      "description": "Business settings"
+    },
+    "/test/{testId}": {
+      "schema": "object",
+      "description": "Connection test"
     }
   }
 }

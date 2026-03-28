@@ -32,6 +32,19 @@ service cloud.firestore {
     //   - status: string (required)
     //   - createdAt: timestamp (required)
     //
+    // Collection: settings
+    // Document ID: info (and others)
+    // Fields:
+    //   - openingHours: map (required)
+    //   - address: string (required)
+    //   - phone: string (required)
+    //   - whatsappNumber: string (required)
+    //   - logoUrl: string (optional)
+    //
+    // Collection: test
+    // Document ID: connection
+    // Fields: any
+    //
     // ===============================================================
 
     // ===============================================================
@@ -67,7 +80,24 @@ service cloud.firestore {
 
     function isValidOrder(data) {
       return data.userId is string && data.items is list &&
-             data.total is number && data.total >= 0;
+             data.total is number && data.total >= 0 &&
+             data.status in ['pending', 'preparing', 'delivering', 'completed', 'cancelled'];
+    }
+
+    function isValidOrderUpdate(newData, oldData) {
+      // User can only cancel their own pending order
+      return newData.diff(oldData).affectedKeys().hasOnly(['status']) &&
+             newData.status == 'cancelled' &&
+             oldData.status == 'pending';
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll(['openingHours', 'address', 'phone', 'whatsappNumber']) &&
+             data.openingHours is map &&
+             data.openingHours.keys().hasAll(['monThu', 'friSat', 'sun']) &&
+             data.address is string && data.address.size() > 0 && data.address.size() < 500 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() < 50 &&
+             data.whatsappNumber is string && data.whatsappNumber.size() > 0 && data.whatsappNumber.size() < 50;
     }
 
     // ===============================================================
@@ -83,14 +113,27 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
       allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'customer';
-      allow update: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) ||
+        (isAdmin() && isValidUser(request.resource.data))
+      );
       allow delete: if isAdmin();
     }
 
     match /orders/{orderId} {
       allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
       allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid && isValidOrder(request.resource.data);
-      allow update, delete: if isAdmin();
+      allow update: if isAdmin() || (isOwner(resource.data.userId) && isValidOrderUpdate(request.resource.data, resource.data));
+      allow delete: if isAdmin();
+    }
+
+    match /settings/{settingId} {
+      allow read: if true; // Business info should be public
+      allow write: if isAdmin() && isValidSettings(request.resource.data);
+    }
+
+    match /test/{testId} {
+      allow read: if true; // Connection test
     }
   }
 }
