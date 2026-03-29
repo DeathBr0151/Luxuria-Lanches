@@ -156,6 +156,7 @@ export default function App() {
   const [isImporting, setIsImporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [adminUsers, setAdminUsers] = useState<UserProfile[]>([]);
+  const [preAuthorizedAdmins, setPreAuthorizedAdmins] = useState<string[]>([]);
   const [adminEmailInput, setAdminEmailInput] = useState('');
   const [isManagingAdmins, setIsManagingAdmins] = useState(false);
   const [adminActionError, setAdminActionError] = useState<string | null>(null);
@@ -181,16 +182,25 @@ export default function App() {
           if (userDoc.exists()) {
             setUserRole(userDoc.data().role);
           } else {
+            // Check if user is pre-authorized
+            const preAuthDoc = await getDoc(doc(db, 'pre_authorized_admins', u.email?.toLowerCase() || ''));
+            const isPreAuth = preAuthDoc.exists();
+
             // Create user profile if it doesn't exist
             const newUser: UserProfile = {
               uid: u.uid,
               email: u.email || '',
               displayName: u.displayName || '',
               photoURL: u.photoURL || '',
-              role: u.email === "pinheiro0151@gmail.com" ? 'admin' : 'customer'
+              role: (u.email === "pinheiro0151@gmail.com" || isPreAuth) ? 'admin' : 'customer'
             };
             await setDoc(doc(db, 'users', u.uid), newUser);
             setUserRole(newUser.role);
+
+            // Remove from pre-authorized list if they were there
+            if (isPreAuth) {
+              await deleteDoc(doc(db, 'pre_authorized_admins', u.email?.toLowerCase() || ''));
+            }
           }
         } catch (error) {
           handleFirestoreError(error, OperationType.GET, `users/${u.uid}`);
@@ -276,45 +286,71 @@ export default function App() {
 
   useEffect(() => {
     if (user && isAdmin && isAdminView && adminTab === 'settings') {
-      const q = query(
+      const qAdmins = query(
         collection(db, 'users'),
         where('role', '==', 'admin')
       );
-      const unsubscribe = onSnapshot(q, (snapshot) => {
+      const unsubscribeAdmins = onSnapshot(qAdmins, (snapshot) => {
         const adminsData = snapshot.docs.map(doc => ({ ...doc.data() } as UserProfile));
         setAdminUsers(adminsData);
       }, (error) => {
         handleFirestoreError(error, OperationType.GET, 'users');
       });
-      return () => unsubscribe();
+
+      const unsubscribePreAuth = onSnapshot(collection(db, 'pre_authorized_admins'), (snapshot) => {
+        setPreAuthorizedAdmins(snapshot.docs.map(doc => doc.id));
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'pre_authorized_admins');
+      });
+
+      return () => {
+        unsubscribeAdmins();
+        unsubscribePreAuth();
+      };
     }
   }, [user, isAdmin, isAdminView, adminTab]);
 
   const handleAddAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!isAdmin || !adminEmailInput.trim()) return;
+    const email = adminEmailInput.trim().toLowerCase();
+    if (!isAdmin || !email) return;
     setAdminActionError(null);
 
     try {
       setIsManagingAdmins(true);
       // Find user by email
-      const q = query(collection(db, 'users'), where('email', '==', adminEmailInput.trim().toLowerCase()));
+      const q = query(collection(db, 'users'), where('email', '==', email));
       const querySnapshot = await getDocs(q);
       
       if (querySnapshot.empty) {
-        setAdminActionError("Usuário não encontrado. O usuário deve ter feito login pelo menos uma vez para ser promovido.");
-        setIsManagingAdmins(false);
+        // Pre-authorize the email
+        await setDoc(doc(db, 'pre_authorized_admins', email), {
+          authorizedBy: user?.email,
+          authorizedAt: serverTimestamp()
+        });
+        toast.success(`E-mail ${email} pré-autorizado como administrador!`);
+        setAdminEmailInput('');
         return;
       }
 
       const userDoc = querySnapshot.docs[0];
       await updateDoc(doc(db, 'users', userDoc.id), { role: 'admin' });
+      toast.success(`Usuário ${email} promovido a administrador!`);
       setAdminEmailInput('');
-      // Success
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'users');
     } finally {
       setIsManagingAdmins(false);
+    }
+  };
+
+  const handleRemovePreAuthorizedAdmin = async (email: string) => {
+    if (!isAdmin) return;
+    try {
+      await deleteDoc(doc(db, 'pre_authorized_admins', email));
+      toast.success(`Pré-autorização de ${email} removida.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `pre_authorized_admins/${email}`);
     }
   };
 
@@ -1025,35 +1061,65 @@ export default function App() {
                       </p>
                     )}
                     <p className="text-[10px] text-neutral-500 mt-2 italic">
-                      O usuário já deve ter acessado o site pelo menos uma vez para ser promovido.
+                      Se o e-mail não estiver cadastrado, ele será pré-autorizado para o próximo login.
                     </p>
                   </form>
 
-                  <div className="space-y-4">
-                    <h4 className="text-xs font-black uppercase tracking-widest text-orange-500">Administradores Atuais</h4>
-                    <div className="space-y-2">
-                      {adminUsers.map(admin => (
-                        <div key={admin.uid} className="flex items-center justify-between bg-neutral-950 p-4 rounded-2xl border border-neutral-800">
-                          <div className="flex items-center gap-3">
-                            <img src={admin.photoURL || ''} alt="" className="w-10 h-10 rounded-full border border-neutral-800" />
-                            <div>
-                              <p className="font-bold text-sm">{admin.displayName || 'Sem Nome'}</p>
-                              <p className="text-xs text-neutral-500">{admin.email}</p>
+                  <div className="space-y-6">
+                    <div className="space-y-4">
+                      <h4 className="text-xs font-black uppercase tracking-widest text-orange-500">Administradores Atuais</h4>
+                      <div className="space-y-2">
+                        {adminUsers.map(admin => (
+                          <div key={admin.uid} className="flex items-center justify-between bg-neutral-950 p-4 rounded-2xl border border-neutral-800">
+                            <div className="flex items-center gap-3">
+                              <img src={admin.photoURL || ''} alt="" className="w-10 h-10 rounded-full border border-neutral-800" />
+                              <div>
+                                <p className="font-bold text-sm">{admin.displayName || 'Sem Nome'}</p>
+                                <p className="text-xs text-neutral-500">{admin.email}</p>
+                              </div>
                             </div>
+                            {admin.email !== "pinheiro0151@gmail.com" && (
+                              <button 
+                                onClick={() => handleRemoveAdmin(admin.uid, admin.email)}
+                                disabled={isManagingAdmins}
+                                className="p-2 text-neutral-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                                title="Remover Acesso Admin"
+                              >
+                                <Trash2 className="w-5 h-5" />
+                              </button>
+                            )}
                           </div>
-                          {admin.email !== "pinheiro0151@gmail.com" && (
-                            <button 
-                              onClick={() => handleRemoveAdmin(admin.uid, admin.email)}
-                              disabled={isManagingAdmins}
-                              className="p-2 text-neutral-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                              title="Remover Acesso Admin"
-                            >
-                              <Trash2 className="w-5 h-5" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        ))}
+                      </div>
                     </div>
+
+                    {preAuthorizedAdmins.length > 0 && (
+                      <div className="space-y-4">
+                        <h4 className="text-xs font-black uppercase tracking-widest text-orange-500">E-mails Pré-Autorizados</h4>
+                        <div className="space-y-2">
+                          {preAuthorizedAdmins.map(email => (
+                            <div key={email} className="flex items-center justify-between bg-neutral-950 p-4 rounded-2xl border border-neutral-800 border-dashed">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-full border border-neutral-800 flex items-center justify-center bg-neutral-900">
+                                  <UserIcon className="w-5 h-5 text-neutral-600" />
+                                </div>
+                                <div>
+                                  <p className="font-bold text-sm">{email}</p>
+                                  <p className="text-[10px] text-neutral-500 uppercase tracking-widest">Aguardando primeiro login</p>
+                                </div>
+                              </div>
+                              <button 
+                                onClick={() => handleRemovePreAuthorizedAdmin(email)}
+                                className="p-2 text-neutral-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                                title="Remover Pré-Autorização"
+                              >
+                                <Trash2 className="w-5 h-5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
