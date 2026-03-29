@@ -153,6 +153,7 @@ export default function App() {
     imageUrl: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80'
   });
   const [isUploading, setIsUploading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [adminUsers, setAdminUsers] = useState<UserProfile[]>([]);
   const [adminEmailInput, setAdminEmailInput] = useState('');
@@ -203,21 +204,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const fetchProducts = async () => {
-      try {
-        const querySnapshot = await getDocs(collection(db, 'products'));
-        const productsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
-        if (productsData.length === 0) {
-          setProducts(MOCK_PRODUCTS);
-        } else {
-          setProducts(productsData);
-        }
-      } catch (error) {
-        handleFirestoreError(error, OperationType.GET, 'products');
+    const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
+      const productsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
+      if (productsData.length === 0) {
         setProducts(MOCK_PRODUCTS);
+      } else {
+        setProducts(productsData);
       }
-    };
-    fetchProducts();
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'products');
+      setProducts(MOCK_PRODUCTS);
+    });
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
@@ -481,6 +479,27 @@ export default function App() {
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}`);
+    }
+  };
+
+  const importMockProducts = async () => {
+    if (!isAdmin) return;
+    setIsImporting(true);
+    const toastId = toast.loading("Importando cardápio de exemplo...");
+    try {
+      for (const product of MOCK_PRODUCTS) {
+        const { id, ...data } = product;
+        await addDoc(collection(db, 'products'), {
+          ...data,
+          createdAt: serverTimestamp()
+        });
+      }
+      toast.success("Cardápio importado com sucesso!", { id: toastId });
+    } catch (error) {
+      toast.error("Erro ao importar cardápio.", { id: toastId });
+      console.error(error);
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -1301,7 +1320,18 @@ export default function App() {
 
                 {/* List */}
                 <div className="lg:col-span-2 space-y-4">
-                  <h3 className="text-xl font-bold mb-6">Produtos Cadastrados</h3>
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-xl font-bold">Produtos Cadastrados</h3>
+                    {products.length < 15 && (
+                      <button 
+                        onClick={importMockProducts}
+                        disabled={isImporting}
+                        className="text-[10px] font-black uppercase tracking-widest text-orange-500 hover:text-orange-400 flex items-center gap-2 transition-colors disabled:opacity-50"
+                      >
+                        <PlusCircle className="w-4 h-4" /> Importar Exemplos
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-4">
                     {products.map(product => (
                       <div key={product.id} className="bg-neutral-900 border border-neutral-800 p-4 rounded-2xl flex items-center gap-4 group hover:border-neutral-700 transition-colors">
