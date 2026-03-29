@@ -25,7 +25,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { auth, signInWithGoogle, logout, db, handleFirestoreError, OperationType, testConnection } from './firebase';
+import { auth, signInWithGoogle, logout, db, handleFirestoreError, OperationType, testConnection, uploadImage } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, getDocs, addDoc, serverTimestamp, updateDoc, deleteDoc, doc, query, where, orderBy, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { cn } from './lib/utils';
@@ -123,6 +123,9 @@ export default function App() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [activeCategory, setActiveCategory] = useState<'lanches' | 'combos' | 'bebidas'>('lanches');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [priceFilter, setPriceFilter] = useState<'all' | 'low' | 'high'>('all');
+  const [adminOrderTab, setAdminOrderTab] = useState<'all' | 'pending' | 'completed' | 'cancelled' | 'today'>('today');
   const [loading, setLoading] = useState(true);
   const [isAdminView, setIsAdminView] = useState(false);
   const [adminTab, setAdminTab] = useState<'products' | 'orders' | 'settings'>('products');
@@ -155,6 +158,11 @@ export default function App() {
   const [isManagingAdmins, setIsManagingAdmins] = useState(false);
   const [adminActionError, setAdminActionError] = useState<string | null>(null);
   const menuRef = useRef<HTMLElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => {
+    audioRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
+  }, []);
 
   const isAdmin = userRole === 'admin' || user?.email === "pinheiro0151@gmail.com";
 
@@ -250,13 +258,22 @@ export default function App() {
       );
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const ordersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
+        
+        // Play sound if there's a new order
+        if (adminOrders.length > 0 && ordersData.length > adminOrders.length) {
+          const newOrder = ordersData[0];
+          if (newOrder.status === 'pending') {
+            audioRef.current?.play().catch(e => console.error("Error playing sound:", e));
+          }
+        }
+        
         setAdminOrders(ordersData);
       }, (error) => {
         handleFirestoreError(error, OperationType.GET, 'orders');
       });
       return () => unsubscribe();
     }
-  }, [user, isAdmin, isAdminView, adminTab]);
+  }, [user, isAdmin, isAdminView, adminTab, adminOrders.length]);
 
   useEffect(() => {
     if (user && isAdmin && isAdminView && adminTab === 'settings') {
@@ -392,20 +409,32 @@ export default function App() {
     window.open(`https://wa.me/${businessInfo.whatsappNumber}?text=${encodedMessage}`, '_blank');
   };
 
-  const handleImageUpload = (file: File) => {
+  const handleImageUpload = async (file: File) => {
     if (!file) return;
 
-    if (file.size > 1024 * 1024) { // 1MB limit for Base64 storage in Firestore
-      return;
+    setIsUploading(true);
+    try {
+      const url = await uploadImage(file);
+      setNewProduct(prev => ({ ...prev, imageUrl: url }));
+    } catch (error) {
+      console.error("Error uploading image:", error);
+    } finally {
+      setIsUploading(false);
     }
+  };
+
+  const handleLogoUpload = async (file: File) => {
+    if (!file) return;
 
     setIsUploading(true);
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setNewProduct(prev => ({ ...prev, imageUrl: reader.result as string }));
+    try {
+      const url = await uploadImage(file, 'logos');
+      setBusinessInfo(prev => ({ ...prev, logoUrl: url }));
+    } catch (error) {
+      console.error("Error uploading logo:", error);
+    } finally {
       setIsUploading(false);
-    };
-    reader.readAsDataURL(file);
+    }
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -507,7 +536,41 @@ export default function App() {
     }
   };
 
-  const filteredProducts = products.filter(p => p.category === activeCategory);
+  const filteredProducts = products.filter(p => {
+    const matchesCategory = p.category === activeCategory;
+    const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                         p.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesPrice = priceFilter === 'all' ? true : 
+                        priceFilter === 'low' ? p.price < 25 : 
+                        p.price >= 25;
+    return matchesCategory && matchesSearch && matchesPrice;
+  });
+
+  const dailyOrders = adminOrders.filter(order => {
+    const orderDate = new Date(order.createdAt?.toDate?.() || Date.now());
+    const today = new Date();
+    return orderDate.getDate() === today.getDate() &&
+           orderDate.getMonth() === today.getMonth() &&
+           orderDate.getFullYear() === today.getFullYear();
+  });
+
+  const dailyRevenue = dailyOrders
+    .filter(order => order.status === 'completed')
+    .reduce((sum, order) => sum + order.total, 0);
+
+  const filteredAdminOrders = adminOrders.filter(order => {
+    const orderDate = new Date(order.createdAt?.toDate?.() || Date.now());
+    const today = new Date();
+    const isToday = orderDate.getDate() === today.getDate() &&
+                    orderDate.getMonth() === today.getMonth() &&
+                    orderDate.getFullYear() === today.getFullYear();
+
+    if (adminOrderTab === 'all') return true;
+    if (adminOrderTab === 'today') return isToday;
+    
+    // The user requested today's orders in each section
+    return order.status === adminOrderTab && isToday;
+  });
 
   if (loading) {
     return (
@@ -831,16 +894,30 @@ export default function App() {
                         alt="Logo Preview" 
                         className="w-full h-full object-cover"
                       />
+                      {isUploading && (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                          <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-orange-500"></div>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <label className="text-xs font-bold uppercase text-neutral-500 mb-1 block">URL da Logo</label>
-                      <input 
-                        type="text" 
-                        value={businessInfo.logoUrl || ''}
-                        onChange={e => setBusinessInfo({...businessInfo, logoUrl: e.target.value})}
-                        placeholder="https://exemplo.com/logo.png"
-                        className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 focus:border-orange-500 outline-none transition-colors"
-                      />
+                    <div className="flex flex-col gap-4">
+                      <label className="text-xs font-bold uppercase text-neutral-500 mb-1 block text-center">Alterar Logo</label>
+                      <label className="w-full bg-neutral-950 border border-neutral-800 hover:border-orange-500/50 hover:bg-neutral-800/50 rounded-xl px-4 py-3 flex items-center justify-center gap-2 cursor-pointer transition-all group">
+                        <Upload className="w-5 h-5 text-neutral-500 group-hover:text-orange-500 transition-colors" />
+                        <span className="text-sm font-bold text-neutral-400 group-hover:text-white transition-colors">Fazer Upload</span>
+                        <input 
+                          type="file" 
+                          className="hidden" 
+                          accept="image/*"
+                          onChange={(e) => e.target.files?.[0] && handleLogoUpload(e.target.files[0])}
+                        />
+                      </label>
+                      {businessInfo.logoUrl && (
+                        <div className="flex items-center gap-2 bg-neutral-950 border border-neutral-800 p-3 rounded-xl">
+                          <ImageIcon className="w-4 h-4 text-neutral-500 shrink-0" />
+                          <p className="text-[10px] text-neutral-500 truncate flex-1">{businessInfo.logoUrl}</p>
+                        </div>
+                      )}
                     </div>
                     <p className="text-xs text-neutral-500 text-center italic">
                       Dica: Use uma imagem quadrada para melhores resultados.
@@ -914,17 +991,98 @@ export default function App() {
               </div>
             ) : adminTab === 'orders' ? (
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xl font-bold">Todos os Pedidos</h3>
-                  <p className="text-neutral-500 text-sm">{adminOrders.length} pedidos no total</p>
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-xl font-bold">Gestão de Pedidos</h3>
+                    <p className="text-neutral-500 text-sm">Acompanhe e gerencie as vendas do dia</p>
+                  </div>
+                  <div className="bg-orange-600/10 border border-orange-500/20 p-4 rounded-2xl flex items-center gap-4">
+                    <div className="w-10 h-10 bg-orange-600 rounded-xl flex items-center justify-center">
+                      <Zap className="text-white w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-orange-500">Ganhos de Hoje</p>
+                      <p className="text-2xl font-black">R$ {dailyRevenue.toFixed(2)}</p>
+                    </div>
+                  </div>
                 </div>
+
+                <div className="flex flex-wrap gap-2 p-1 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <button 
+                    onClick={() => setAdminOrderTab('today')}
+                    className={cn(
+                      "flex-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all",
+                      adminOrderTab === 'today' ? "bg-orange-600 text-white shadow-lg shadow-orange-600/20" : "text-neutral-500 hover:text-neutral-300"
+                    )}
+                  >
+                    Hoje ({dailyOrders.length})
+                  </button>
+                  <button 
+                    onClick={() => setAdminOrderTab('pending')}
+                    className={cn(
+                      "flex-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all",
+                      adminOrderTab === 'pending' ? "bg-yellow-600 text-white shadow-lg shadow-yellow-600/20" : "text-neutral-500 hover:text-neutral-300"
+                    )}
+                  >
+                    Andamento Hoje ({adminOrders.filter(o => {
+                      const orderDate = new Date(o.createdAt?.toDate?.() || Date.now());
+                      const today = new Date();
+                      const isToday = orderDate.getDate() === today.getDate() &&
+                                      orderDate.getMonth() === today.getMonth() &&
+                                      orderDate.getFullYear() === today.getFullYear();
+                      return o.status === 'pending' && isToday;
+                    }).length})
+                  </button>
+                  <button 
+                    onClick={() => setAdminOrderTab('completed')}
+                    className={cn(
+                      "flex-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all",
+                      adminOrderTab === 'completed' ? "bg-green-600 text-white shadow-lg shadow-green-600/20" : "text-neutral-500 hover:text-neutral-300"
+                    )}
+                  >
+                    Finalizados Hoje ({adminOrders.filter(o => {
+                      const orderDate = new Date(o.createdAt?.toDate?.() || Date.now());
+                      const today = new Date();
+                      const isToday = orderDate.getDate() === today.getDate() &&
+                                      orderDate.getMonth() === today.getMonth() &&
+                                      orderDate.getFullYear() === today.getFullYear();
+                      return o.status === 'completed' && isToday;
+                    }).length})
+                  </button>
+                  <button 
+                    onClick={() => setAdminOrderTab('cancelled')}
+                    className={cn(
+                      "flex-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all",
+                      adminOrderTab === 'cancelled' ? "bg-red-600 text-white shadow-lg shadow-red-600/20" : "text-neutral-500 hover:text-neutral-300"
+                    )}
+                  >
+                    Cancelados Hoje ({adminOrders.filter(o => {
+                      const orderDate = new Date(o.createdAt?.toDate?.() || Date.now());
+                      const today = new Date();
+                      const isToday = orderDate.getDate() === today.getDate() &&
+                                      orderDate.getMonth() === today.getMonth() &&
+                                      orderDate.getFullYear() === today.getFullYear();
+                      return o.status === 'cancelled' && isToday;
+                    }).length})
+                  </button>
+                  <button 
+                    onClick={() => setAdminOrderTab('all')}
+                    className={cn(
+                      "flex-1 px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all",
+                      adminOrderTab === 'all' ? "bg-neutral-700 text-white" : "text-neutral-500 hover:text-neutral-300"
+                    )}
+                  >
+                    Todos ({adminOrders.length})
+                  </button>
+                </div>
+
                 <div className="grid grid-cols-1 gap-6">
-                  {adminOrders.length === 0 ? (
+                  {filteredAdminOrders.length === 0 ? (
                     <div className="bg-neutral-900 p-12 rounded-3xl border border-neutral-800 text-center">
-                      <p className="text-neutral-500">Nenhum pedido realizado ainda.</p>
+                      <p className="text-neutral-500 italic">Nenhum pedido encontrado nesta seção.</p>
                     </div>
                   ) : (
-                    adminOrders.map(order => (
+                    filteredAdminOrders.map(order => (
                       <div key={order.id} className="bg-neutral-900 border border-neutral-800 rounded-3xl overflow-hidden">
                         <div className="p-6 border-b border-neutral-800 flex flex-wrap items-center justify-between gap-4">
                           <div className="flex items-center gap-4">
@@ -1192,7 +1350,7 @@ export default function App() {
 
         {/* Menu Section */}
         <section ref={menuRef}>
-          <div className="flex items-center justify-between mb-10">
+          <div className="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-6">
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 bg-neutral-900 rounded-2xl flex items-center justify-center border border-neutral-800">
                 {activeCategory === 'lanches' && <Utensils className="text-orange-500" />}
@@ -1203,9 +1361,48 @@ export default function App() {
                 Nossos <span className="text-orange-500">{activeCategory}</span>
               </h3>
             </div>
-            <p className="hidden md:block text-neutral-500 text-sm font-medium">
-              {filteredProducts.length} itens disponíveis
-            </p>
+
+            <div className="flex flex-col sm:flex-row gap-4 flex-1 max-w-2xl">
+              <div className="relative flex-1">
+                <input 
+                  type="text" 
+                  placeholder="Buscar no cardápio..." 
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-neutral-900 border border-neutral-800 rounded-2xl px-12 py-3 focus:border-orange-500 outline-none transition-all text-sm"
+                />
+                <MenuIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-500" />
+              </div>
+              <div className="flex bg-neutral-900 p-1 rounded-2xl border border-neutral-800">
+                <button 
+                  onClick={() => setPriceFilter('all')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                    priceFilter === 'all' ? "bg-orange-600 text-white" : "text-neutral-500 hover:text-neutral-300"
+                  )}
+                >
+                  Todos
+                </button>
+                <button 
+                  onClick={() => setPriceFilter('low')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                    priceFilter === 'low' ? "bg-orange-600 text-white" : "text-neutral-500 hover:text-neutral-300"
+                  )}
+                >
+                  Até R$25
+                </button>
+                <button 
+                  onClick={() => setPriceFilter('high')}
+                  className={cn(
+                    "px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all",
+                    priceFilter === 'high' ? "bg-orange-600 text-white" : "text-neutral-500 hover:text-neutral-300"
+                  )}
+                >
+                  R$25+
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
