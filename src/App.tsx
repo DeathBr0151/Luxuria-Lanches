@@ -25,6 +25,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Toaster, toast } from 'sonner';
 import { auth, signInWithGoogle, logout, db, handleFirestoreError, OperationType, testConnection, uploadImage } from './firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, getDocs, addDoc, serverTimestamp, updateDoc, deleteDoc, doc, query, where, orderBy, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
@@ -367,7 +368,7 @@ export default function App() {
 
   const handleCheckout = async () => {
     if (!user) {
-      signInWithGoogle();
+      handleLogin();
       return;
     }
 
@@ -488,27 +489,43 @@ export default function App() {
     if (!isAdmin) return;
 
     try {
+      const productData = {
+        name: newProduct.name,
+        description: newProduct.description,
+        price: Number(newProduct.price),
+        category: newProduct.category,
+        imageUrl: newProduct.imageUrl
+      };
+
       if (editingProduct) {
         const productRef = doc(db, 'products', editingProduct.id);
-        await updateDoc(productRef, {
-          name: newProduct.name,
-          description: newProduct.description,
-          price: Number(newProduct.price),
-          category: newProduct.category,
-          imageUrl: newProduct.imageUrl
-        });
-        setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...newProduct } as Product : p));
+        
+        // Check if it's a mock product (doesn't exist in Firestore yet)
+        const docSnap = await getDoc(productRef);
+        
+        if (docSnap.exists()) {
+          await updateDoc(productRef, productData);
+        } else {
+          // It's a mock product or deleted, create it
+          await setDoc(productRef, {
+            ...productData,
+            createdAt: serverTimestamp()
+          });
+        }
+        
+        setProducts(prev => prev.map(p => p.id === editingProduct.id ? { ...p, ...productData } as Product : p));
       } else {
         const docRef = await addDoc(collection(db, 'products'), {
-          ...newProduct,
-          price: Number(newProduct.price),
+          ...productData,
           createdAt: serverTimestamp()
         });
-        setProducts(prev => [...prev, { id: docRef.id, ...newProduct } as Product]);
+        setProducts(prev => [...prev, { id: docRef.id, ...productData } as Product]);
       }
       setEditingProduct(null);
       setNewProduct({ name: '', description: '', price: 0, category: 'lanches', imageUrl: 'https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80' });
+      toast.success(editingProduct ? "Produto atualizado com sucesso!" : "Produto criado com sucesso!");
     } catch (error) {
+      toast.error("Erro ao salvar produto. Verifique sua conexão.");
       handleFirestoreError(error, editingProduct ? OperationType.UPDATE : OperationType.CREATE, editingProduct ? `products/${editingProduct.id}` : 'products');
     }
   };
@@ -520,8 +537,9 @@ export default function App() {
     try {
       await setDoc(doc(db, 'settings', 'info'), businessInfo);
       setIsEditingInfo(false);
-      // Success
+      toast.success("Configurações salvas com sucesso!");
     } catch (error) {
+      toast.error("Erro ao salvar configurações.");
       handleFirestoreError(error, OperationType.WRITE, 'settings/info');
     }
   };
@@ -531,8 +549,28 @@ export default function App() {
     try {
       await deleteDoc(doc(db, 'products', id));
       setProducts(prev => prev.filter(p => p.id !== id));
+      toast.success("Produto excluído com sucesso!");
     } catch (error) {
+      toast.error("Erro ao excluir produto.");
       handleFirestoreError(error, OperationType.DELETE, `products/${id}`);
+    }
+  };
+
+  const handleLogin = async () => {
+    try {
+      await signInWithGoogle();
+      toast.success("Login realizado com sucesso!");
+    } catch (error) {
+      toast.error("Erro ao fazer login.");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      toast.success("Sessão encerrada.");
+    } catch (error) {
+      toast.error("Erro ao sair.");
     }
   };
 
@@ -581,8 +619,10 @@ export default function App() {
   }
 
   return (
-    <ErrorBoundary>
-      <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans selection:bg-orange-500/30">
+    <>
+      <Toaster position="top-right" richColors theme="dark" />
+      <ErrorBoundary>
+        <div className="min-h-screen bg-neutral-950 text-neutral-100 font-sans selection:bg-orange-500/30">
       {/* Header */}
       <header className="sticky top-0 z-40 bg-neutral-950/80 backdrop-blur-md border-b border-neutral-800">
         <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
@@ -670,13 +710,13 @@ export default function App() {
                   </button>
                 )}
                 <img src={user.photoURL || ''} alt="" className="w-8 h-8 rounded-full border border-neutral-700" />
-                <button onClick={logout} className="p-2 hover:bg-neutral-800 rounded-full text-neutral-400 hover:text-white transition-colors">
+                <button onClick={handleLogout} className="p-2 hover:bg-neutral-800 rounded-full text-neutral-400 hover:text-white transition-colors">
                   <LogOut className="w-5 h-5" />
                 </button>
               </div>
             ) : (
               <button 
-                onClick={signInWithGoogle}
+                onClick={handleLogin}
                 className="flex items-center gap-2 bg-white text-black px-4 py-2 rounded-full text-sm font-bold hover:bg-neutral-200 transition-colors"
               >
                 <UserIcon className="w-4 h-4" />
@@ -1596,5 +1636,6 @@ export default function App() {
       </footer>
     </div>
     </ErrorBoundary>
+    </>
   );
 }
