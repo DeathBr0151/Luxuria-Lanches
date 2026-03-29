@@ -645,8 +645,17 @@ export default function App() {
       {/* Header */}
       <header className="sticky top-0 z-40 bg-neutral-950/80 backdrop-blur-md border-b border-neutral-800">
         <div className="max-w-7xl mx-auto px-4 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 bg-orange-600 rounded-lg flex items-center justify-center shadow-lg shadow-orange-600/20 overflow-hidden">
+          <div 
+            className="flex items-center gap-2 cursor-pointer group"
+            onClick={() => {
+              setIsAdminView(false);
+              setIsHistoryOpen(false);
+              setIsManagingAdmins(false);
+              setIsCartOpen(false);
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
+          >
+            <div className="w-10 h-10 bg-orange-600 rounded-lg flex items-center justify-center shadow-lg shadow-orange-600/20 overflow-hidden group-hover:scale-110 transition-transform">
               <img 
                 src={businessInfo.logoUrl || "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=64&h=64&q=80"} 
                 alt="Logo" 
@@ -654,8 +663,8 @@ export default function App() {
                 referrerPolicy="no-referrer"
               />
             </div>
-            <h1 className="text-2xl font-black tracking-tighter uppercase italic">
-              Luxuria <span className="text-orange-500">Lanches</span>
+            <h1 className="text-2xl font-black tracking-tighter uppercase italic group-hover:text-orange-500 transition-colors">
+              Luxuria <span className="text-orange-500 group-hover:text-white transition-colors">Lanches</span>
             </h1>
           </div>
 
